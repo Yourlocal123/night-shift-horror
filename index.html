@@ -45,6 +45,7 @@ button:hover{background:#444}
 @media (pointer:coarse){#controls{display:block}}
 </style>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 <canvas id="game"></canvas>
@@ -629,6 +630,7 @@ canvas.addEventListener("click",()=>{
 document.addEventListener("pointerlockchange",()=>{});
 
 let peer=null;
+let relay=null, publicRelay=false;
 let connections=[];
 let remotePlayers={};
 let multiplayer=false;
@@ -686,7 +688,7 @@ function updatePlayerList(){
  const count=Math.min(MAX_PLAYERS,Math.max(1,names.length));
  playerList.innerHTML=`<b>Players: ${count}/${MAX_PLAYERS}</b>`+(serverName?` — ${serverName}`:"")+`<div style="margin-top:6px;line-height:1.5">${names.slice(0,MAX_PLAYERS).map((n,i)=>`${i===0?"🟢":"👤"} ${String(n).replace(/[&<>]/g,"_")}`).join("<br>")}</div>`;
 }
-function sendAll(data){connections.forEach(c=>{try{if(c.open)c.send(data)}catch(e){}})}
+function sendAll(data){if(publicRelay){try{relay.emit("room-message",data)}catch(e){};return;}connections.forEach(c=>{try{if(c.open)c.send(data)}catch(e){}})}
 function makeRoster(){
  const roster=[{id:myPlayerId,name:myName(),model:modelIndex(myPlayerId),x:player?.x||0,y:player?.y||0,a:player?.a||0,dead:!!playerDead}];
  for(const id in remotePlayers){
@@ -1116,6 +1118,32 @@ function joinPrivate(){
  serverName=`Private ${code}`;isHost=false;setMultiStatus(`Connecting to private server ${code}...`);
  peer=createGamePeer();peer.on("open",pid=>{myPlayerId=pid;document.getElementById("modelLabel").textContent=`Player ${modelIndex(myPlayerId)+1}`;const c=peer.connect(`nightshift-private-${code}`,{reliable:true});c.on("open",()=>{connections=[c];beginMultiplayer(false);c.send({type:"hello",id:myPlayerId,name:myName(),model:modelIndex(myPlayerId),password:privatePassword,x:player.x,y:player.y,a:player.a});setMultiStatus("Connected!");updatePlayerList()});c.on("data",d=>{if(d.type==="full")setMultiStatus("That server is full (10/10).");else if(d.type==="badpassword"){setMultiStatus("Wrong password. Access denied.");try{c.close();peer.destroy()}catch(e){}}else handleNetData(c,d)});c.on("close",()=>setMultiStatus("Private server disconnected."));});peer.on("error",()=>setMultiStatus("Private server not found. Make sure the host is online."));
 }
+// Render relay public rooms. This works across cellular/Wi-Fi networks where
+// direct WebRTC cannot establish a stable route.
+function joinPublic(n){
+ publicLobby=true;publicRelay=true;advancingPublicLevel=false;serverName=`Public Server ${n}`;
+ remotePlayers={};connections=[];myPlayerId="";isHost=false;multiplayer=true;waitingForWorld=true;
+ try{if(peer?.destroy)peer.destroy()}catch(e){} peer=null;
+ startAudio();level=1;try{reset()}catch(e){} running=false;paused=false;gameOver=false;playerDead=false;
+ pauseBtn.style.display="block";start.style.display="none";multi.style.display="none";playerName.disabled=true;
+ setMultiStatus(`${serverName}: connecting...`);updatePlayerList();
+ relay=io({transports:["websocket","polling"]});
+ relay.on("room-role",role=>{
+   myPlayerId=relay.id;peer={relay:true};isHost=!!role.host;
+   document.getElementById("modelLabel").textContent=`Player ${modelIndex(myPlayerId)+1}`;
+   if(isHost){beginMultiplayer(true);setMultiStatus(`${serverName}: hosting shared world`);broadcastSnapshot();}
+   else {beginMultiplayer(false);setMultiStatus(`${serverName}: syncing shared world...`);relay.emit("room-message",{type:"hello",id:myPlayerId,name:myName(),model:modelIndex(myPlayerId),x:player.x,y:player.y,a:player.a});}
+ });
+ relay.on("room-message",packet=>{
+   const d=packet?.data;if(!d)return;
+   if(isHost){let c=connections.find(x=>x.peer===packet.from);if(!c){c={peer:packet.from,open:true,send:data=>relay.emit("direct-message",{to:packet.from,data})};connections.push(c);}handleNetData(c,d);}
+   else handleNetData({peer:packet?.from,open:true},d);
+ });
+ relay.on("peer-left",id=>{delete remotePlayers[id];connections=connections.filter(c=>c.peer!==id);updatePlayerList();broadcastSnapshot();});
+ relay.on("host-left",()=>{if(!isHost){running=false;waitingForWorld=true;setMultiStatus("HOST DISCONNECTED — rejoin a server");}});
+ relay.on("connect_error",()=>setMultiStatus("SERVER CONNECTION FAILED — refresh and try again"));
+ relay.emit("join-public",`nightshift-public-${n}`);
+}
 document.getElementById("multiBtn").onclick=()=>{start.style.display="none";multi.style.display="flex";setMultiStatus("Choose a server.");};
 document.getElementById("backMulti").onclick=()=>{multi.style.display="none";start.style.display="flex";};
 document.getElementById("createPrivate").onclick=createPrivate;
@@ -1128,6 +1156,8 @@ function disconnectMultiplayer(){
   connections=[];
   remotePlayers={};
   if(peer){try{peer.destroy()}catch(e){}}
+  if(relay){try{relay.disconnect()}catch(e){} relay=null;}
+  publicRelay=false;
   peer=null;
   multiplayer=false;
   publicLobby=false;
