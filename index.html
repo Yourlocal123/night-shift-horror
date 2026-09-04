@@ -1022,7 +1022,7 @@ function joinPublic(n){
        setTimeout(requestAuthoritativeWorld,250);
      });
      c.on("data",d=>{if(d?.type==="full"){showNetwork("server full (10/10)");try{c.close()}catch(e){};return;}if(d?.type==="badpassword"){showNetwork("wrong password");try{c.close()}catch(e){};return;}handleNetData(c,d);});
-     c.on("close",()=>{clearTimeout(timeout); if(waitingForWorld) running=false; showNetwork(done?"HOST DISCONNECTED — multiplayer stopped":"HOST NOT REACHED — multiplayer connection failed");});
+     c.on("close",()=>{clearTimeout(timeout); running=false; waitingForWorld=true; showNetwork(done?"HOST DISCONNECTED — rejoin a server":"HOST NOT REACHED — multiplayer connection failed");});
      c.on("error",()=>{clearTimeout(timeout);if(!done)showNetwork("HOST NOT REACHED — multiplayer connection failed");});
    });
    peer.on("error",e=>{
@@ -1040,7 +1040,7 @@ function joinPublic(n){
          const jt=setTimeout(()=>{try{c.close()}catch(e){};showNetwork("HOST UNREACHABLE — multiplayer connection failed")},8000);
          c.on("open",()=>{clearTimeout(jt);waitingForWorld=true;c.send({type:"hello",id:myPlayerId,name:myName(),model:modelIndex(myPlayerId),x:player.x,y:player.y,a:player.a});showNetwork("connected — syncing shared world...")});
          c.on("data",d=>handleNetData(c,d));
-         c.on("close",()=>{if(waitingForWorld) running=false;showNetwork("HOST DISCONNECTED — multiplayer stopped");});
+         c.on("close",()=>{running=false;waitingForWorld=true;showNetwork("HOST DISCONNECTED — rejoin a server");});
        });
        peer.on("error",()=>showNetwork("HOST UNREACHABLE — multiplayer connection failed"));
      }else showNetwork("NETWORK UNAVAILABLE — multiplayer connection failed");
@@ -1183,11 +1183,15 @@ document.getElementById("flashBtn").addEventListener("click",()=>{
 
 function hold(id,key){
  const el=document.getElementById(id);
- el.addEventListener("touchstart",e=>{e.preventDefault();keys[key]=true},{passive:false});
- el.addEventListener("touchend",e=>{e.preventDefault();keys[key]=false},{passive:false});
- el.addEventListener("mousedown",()=>keys[key]=true);
- el.addEventListener("mouseup",()=>keys[key]=false);
- el.addEventListener("mouseleave",()=>keys[key]=false);
+ const press=e=>{e.preventDefault();try{el.setPointerCapture?.(e.pointerId)}catch(_){}keys[key]=true};
+ const release=e=>{e.preventDefault();keys[key]=false};
+ // Pointer events handle phone touch, mouse, and interrupted touches.  The old
+ // touch-only handlers could leave a movement key in the wrong state on phone.
+ el.addEventListener("pointerdown",press,{passive:false});
+ el.addEventListener("pointerup",release,{passive:false});
+ el.addEventListener("pointercancel",release,{passive:false});
+ el.addEventListener("lostpointercapture",release,{passive:false});
+ el.addEventListener("pointerleave",release,{passive:false});
 }
 hold("up","w");hold("down","s");hold("left","a");hold("right","d");
 hold("turnL","ArrowLeft");hold("turnR","ArrowRight");
