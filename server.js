@@ -33,7 +33,7 @@ function lobbyNumber(value) {
 function getLobby(number) {
   if (!lobbies.has(number)) {
     lobbies.set(number, {
-      hostPeerId: `nightshift-public-${number}`,
+      hostPeerId: null,
       players: new Map(),
       updatedAt: Date.now(),
     });
@@ -68,6 +68,33 @@ app.get("/api/lobbies", (_req, res) => {
     });
   }
   res.json(result);
+});
+
+app.get("/api/lobbies/:number", (_req, res) => {
+  pruneLobbies();
+  const number = lobbyNumber(_req.params.number);
+  if (!number) return res.status(400).json({ error: "Invalid public server." });
+  const lobby = lobbies.get(number);
+  if (!lobby) return res.json({ number, online: false, players: 0, maxPlayers: MAX_PLAYERS, hostPeerId: null });
+  res.json({ number, online: true, players: lobby.players.size, maxPlayers: MAX_PLAYERS, hostPeerId: lobby.hostPeerId });
+});
+
+app.post("/api/lobbies/:number/host", (req, res) => {
+  pruneLobbies();
+  const number = lobbyNumber(req.params.number);
+  if (!number) return res.status(400).json({ error: "Invalid public server." });
+  const lobby = lobbies.get(number);
+  if (!lobby) return res.status(404).json({ error: "Lobby no longer exists." });
+  const playerKey = String(req.body?.playerKey || "");
+  const player = lobby.players.get(playerKey);
+  if (!player) return res.status(404).json({ error: "Player is no longer in the lobby." });
+  const peerId = String(req.body?.peerId || "").trim();
+  if (!peerId || peerId.length > 120) return res.status(400).json({ error: "Invalid PeerJS ID." });
+  if (lobby.hostPeerId && lobby.hostPeerId !== peerId) return res.status(409).json({ error: "A host is already registered.", hostPeerId: lobby.hostPeerId });
+  lobby.hostPeerId = peerId;
+  player.lastSeen = Date.now();
+  lobby.updatedAt = Date.now();
+  res.json({ ok: true, hostPeerId: lobby.hostPeerId });
 });
 
 app.post("/api/lobbies/:number/join", (req, res) => {

@@ -39,7 +39,7 @@ button:hover{background:#444}
 .pausePanel{background:#111;border:1px solid #777;border-radius:12px;padding:28px 35px;box-shadow:0 0 30px #000}
 #passwordBox{display:none;margin:10px 0}.passInput{padding:12px;background:#111;color:#fff;border:1px solid #777;border-radius:8px;font-size:16px;width:220px}
 .dpad{display:grid;grid-template-columns:60px 60px 60px;gap:5px;width:190px}
-.dpad button,.look button{width:60px;height:55px;padding:0;pointer-events:auto;opacity:.65}
+.dpad button,.look button{width:60px;height:55px;padding:0;pointer-events:auto;opacity:.65;touch-action:none;-webkit-user-select:none;user-select:none}
 .look{position:absolute;right:0;bottom:0;display:flex;gap:5px}
 #dark{position:fixed;inset:0;background:#000;opacity:.0;pointer-events:none;z-index:4}
 @media (pointer:coarse){#controls{display:block}}
@@ -1005,7 +1005,6 @@ async function joinPublic(n){
  publicLobby=true; advancingPublicLevel=false; serverName=`Public Server ${n}`;
  remotePlayers={}; connections=[]; myPlayerId=""; isHost=false; multiplayer=true; waitingForWorld=true;
  publicLobbyNumber=Number(n); publicLobbyPlayerKey=""; stopPublicHeartbeat();
-
  if(peer){try{peer.destroy()}catch(e){}}
  startAudio(); level=1;
  try{reset();}catch(e){
@@ -1020,64 +1019,76 @@ async function joinPublic(n){
  }
  running=false; waitingForWorld=true; paused=false; gameOver=false; playerDead=false;
  pauseBtn.style.display="block"; start.style.display="none"; multi.style.display="none"; playerName.disabled=true;
- try{render();}catch(e){console.error("Initial multiplayer render failed",e)}
+ try{render()}catch(e){console.error("Initial multiplayer render failed",e)}
  setMultiStatus(`${serverName} connecting to Render...`); message.textContent=""; updatePlayerList();
-
  try{
    const lobby=await lobbyApi(`/api/lobbies/${publicLobbyNumber}/join`,{method:"POST",body:JSON.stringify({name:myName()})});
    publicLobbyPlayerKey=lobby.playerKey;
-   const hostId=lobby.hostPeerId;
    startPublicHeartbeat();
 
-   if(lobby.role==="host") {
+   if(lobby.role==="host"){
      isHost=true;
-     setMultiStatus(`${serverName}: creating shared host...`);
-     try{peer=makePeer(hostId);}catch(e){throw new Error("PeerJS could not start.");}
-     peer.on("open",pid=>{
-       myPlayerId=pid;
-       document.getElementById("modelLabel").textContent=`Player ${modelIndex(pid)+1}`;
-       waitingForWorld=false;
-       level=1;
-       try{reset()}catch(e){console.error("Host reset failed",e)}
-       running=true;
-       setMultiStatus(`${serverName}: connected — you are host (${lobby.players}/${lobby.maxPlayers})`);
-       updatePlayerList();
-       beginMultiplayer(true);
-       try{broadcastSnapshot()}catch(e){console.error(e)}
-       setTimeout(()=>{if(isHost)broadcastSnapshot()},250);
-       setTimeout(()=>{if(isHost)broadcastSnapshot()},1000);
+     setMultiStatus(`${serverName}: starting host...`);
+     peer=makePeer();
+     peer.on("open",async pid=>{
+       try{
+         myPlayerId=pid;
+         document.getElementById("modelLabel").textContent=`Player ${modelIndex(pid)+1}`;
+         await lobbyApi(`/api/lobbies/${publicLobbyNumber}/host`,{method:"POST",body:JSON.stringify({playerKey:publicLobbyPlayerKey,peerId:pid})});
+         waitingForWorld=false; level=1; reset(); running=true;
+         setMultiStatus(`${serverName}: connected — you are host (${lobby.players}/${lobby.maxPlayers})`);
+         updatePlayerList(); beginMultiplayer(true); broadcastSnapshot();
+       }catch(e){
+         console.error("Host registration failed",e);
+         setMultiStatus(`${serverName}: could not register host.`);
+       }
      });
-     peer.on("connection",c=>{if(!isHost)return;setupConnection(c)});
+     peer.on("connection",c=>{if(isHost)setupConnection(c)});
      peer.on("error",e=>{console.error("Host PeerJS error",e);setMultiStatus(`${serverName}: PeerJS error — ${e?.type||"network error"}`)});
-   } else {
+   }else{
      isHost=false;
-     setMultiStatus(`${serverName}: connecting to host... (${lobby.players}/${lobby.maxPlayers})`);
+     let hostId=lobby.hostPeerId;
+     setMultiStatus(`${serverName}: waiting for the host... (${lobby.players}/${lobby.maxPlayers})`);
+
+     const waitForHost=async()=>{
+       for(let attempt=0; attempt<40; attempt++){
+         if(!publicLobbyPlayerKey) return null;
+         try{
+           const state=await lobbyApi(`/api/lobbies/${publicLobbyNumber}`);
+           if(state.hostPeerId){hostId=state.hostPeerId;return hostId;}
+         }catch(e){}
+         await new Promise(r=>setTimeout(r,500));
+       }
+       return null;
+     };
+
+     hostId=hostId || await waitForHost();
+     if(!hostId) throw new Error("The server host was not found. Try again.");
      try{peer=makePeer();}catch(e){throw new Error("PeerJS could not start.");}
      peer.on("open",pid=>{
        myPlayerId=pid;
        document.getElementById("modelLabel").textContent=`Player ${modelIndex(pid)+1}`;
        let done=false;
        let c;
-       try{c=peer.connect(hostId,{reliable:true});}catch(e){setMultiStatus(`${serverName}: host could not be reached.`);return;}
+       try{c=peer.connect(hostId,{reliable:true})}catch(e){setMultiStatus(`${serverName}: host could not be reached.`);return;}
        connections=[c];
        const timeout=setTimeout(()=>{if(!done){try{c.close()}catch(e){}setMultiStatus(`${serverName}: host could not be reached.`)}},10000);
        c.on("open",()=>{
-         done=true; clearTimeout(timeout); waitingForWorld=true;
+         done=true;clearTimeout(timeout);waitingForWorld=true;
          c.send({type:"hello",id:myPlayerId,name:myName(),model:modelIndex(myPlayerId),x:player.x,y:player.y,a:player.a});
          try{c.send({type:"requestWorld",id:myPlayerId})}catch(e){}
          setMultiStatus(`${serverName}: connected — syncing shared world...`);
          beginMultiplayer(false);
        });
        c.on("data",d=>handleNetData(c,d));
-       c.on("close",()=>{if(waitingForWorld)running=false;setMultiStatus(`${serverName}: host disconnected.`)});
+       c.on("close",()=>{running=false;waitingForWorld=true;setMultiStatus(`${serverName}: host disconnected.`)});
        c.on("error",()=>{if(!done)setMultiStatus(`${serverName}: host connection failed.`)});
      });
      peer.on("error",e=>console.error("Client PeerJS error",e));
    }
  }catch(e){
    console.error("Public lobby join failed",e);
-   stopPublicHeartbeat();
-   publicLobbyNumber=0; publicLobbyPlayerKey="";
+   stopPublicHeartbeat(); publicLobbyNumber=0; publicLobbyPlayerKey="";
    setMultiStatus(`${serverName}: ${e.message||"multiplayer connection failed"}`);
    running=false; waitingForWorld=false; playerName.disabled=false;
  }
@@ -1168,21 +1179,19 @@ document.getElementById("startBtn").onclick=()=>{
 };
 
 
-document.getElementById("flashBtn").addEventListener("touchstart",e=>{
+document.getElementById("flashBtn").addEventListener("pointerdown",e=>{
  e.preventDefault();
  if(battery>0) flashlight=!flashlight;
 },{passive:false});
-document.getElementById("flashBtn").addEventListener("click",()=>{
- if(battery>0) flashlight=!flashlight;
-});
 
 function hold(id,key){
  const el=document.getElementById(id);
- el.addEventListener("touchstart",e=>{e.preventDefault();keys[key]=true},{passive:false});
- el.addEventListener("touchend",e=>{e.preventDefault();keys[key]=false},{passive:false});
- el.addEventListener("mousedown",()=>keys[key]=true);
- el.addEventListener("mouseup",()=>keys[key]=false);
- el.addEventListener("mouseleave",()=>keys[key]=false);
+ const down=e=>{e.preventDefault();keys[key]=true;try{el.setPointerCapture(e.pointerId)}catch(_){} };
+ const up=e=>{e.preventDefault();keys[key]=false;};
+ el.addEventListener("pointerdown",down,{passive:false});
+ el.addEventListener("pointerup",up,{passive:false});
+ el.addEventListener("pointercancel",up,{passive:false});
+ el.addEventListener("pointerleave",e=>{if(e.buttons===0)keys[key]=false},{passive:false});
 }
 hold("up","w");hold("down","s");hold("left","a");hold("right","d");
 hold("turnL","ArrowLeft");hold("turnR","ArrowRight");
