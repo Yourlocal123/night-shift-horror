@@ -45,7 +45,9 @@ button:hover{background:#444}
 @media (pointer:coarse){#controls{display:block}}
 </style>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script src="/socket.io/socket.io.js"></script>
+<!-- Load the compatible Socket.IO client from the CDN.  This avoids a static
+     host/proxy mistakenly serving index.html for the server-side client path. -->
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
 </head>
 <body>
 <canvas id="game"></canvas>
